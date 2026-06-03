@@ -23,6 +23,8 @@ func TestImageHandlerIgnoresPathAndReturnsPNG(t *testing.T) {
 			format:      formatPNG,
 			hasFormat:   true,
 			cache:       cachePolicy{seconds: defaultCacheSeconds},
+			label:       true,
+			quality:     defaultQuality,
 		},
 	}
 
@@ -54,7 +56,7 @@ func TestImageHandlerIgnoresPathAndReturnsPNG(t *testing.T) {
 		t.Fatalf("background pixel = %#v, want %#v", gotBackground, wantColor)
 	}
 
-	label := newLabelImage(width, height, wantColor)
+	label := newLabelImage(width, height, wantColor, true)
 	x, y, ok := firstLabelPixel(label)
 	if !ok {
 		t.Fatal("label image did not produce any label pixels")
@@ -62,6 +64,37 @@ func TestImageHandlerIgnoresPathAndReturnsPNG(t *testing.T) {
 	gotText := color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA)
 	if gotText != label.fg {
 		t.Fatalf("label pixel = %#v, want %#v", gotText, label.fg)
+	}
+}
+
+func TestEncodePNGCanDisableLabel(t *testing.T) {
+	bg := color.NRGBA{R: 0xee, G: 0xdd, B: 0xcc, A: 0xff}
+	spec := imageSpec{
+		width:   80,
+		height:  40,
+		color:   bg,
+		format:  formatPNG,
+		label:   false,
+		quality: defaultQuality,
+	}
+
+	var buf bytes.Buffer
+	if err := encodeImage(&buf, spec); err != nil {
+		t.Fatalf("encodeImage returned error: %v", err)
+	}
+	img, err := png.Decode(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatalf("png.Decode returned error: %v", err)
+	}
+
+	bounds := img.Bounds()
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			got := color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA)
+			if got != bg {
+				t.Fatalf("pixel at %d,%d = %#v, want %#v", x, y, got, bg)
+			}
+		}
 	}
 }
 

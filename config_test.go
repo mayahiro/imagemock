@@ -69,6 +69,36 @@ func TestParseArgsRejectsInvalidCacheControl(t *testing.T) {
 	}
 }
 
+func TestParseArgsParsesLabelQualityAndSeed(t *testing.T) {
+	cfg, err := parseArgs([]string{"--no-label", "--quality", "92", "--seed", "12345"}, io.Discard)
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+	if cfg.label {
+		t.Fatal("label = true, want false")
+	}
+	if cfg.quality != 92 {
+		t.Fatalf("quality = %d, want 92", cfg.quality)
+	}
+	if cfg.random == nil || cfg.random.r == nil {
+		t.Fatal("seeded random source was not configured")
+	}
+}
+
+func TestParseArgsRejectsInvalidQuality(t *testing.T) {
+	_, err := parseArgs([]string{"--quality", "0"}, io.Discard)
+	if err == nil {
+		t.Fatal("parseArgs returned nil error for invalid quality")
+	}
+}
+
+func TestParseArgsRejectsInvalidSeed(t *testing.T) {
+	_, err := parseArgs([]string{"--seed", "not-a-number"}, io.Discard)
+	if err == nil {
+		t.Fatal("parseArgs returned nil error for invalid seed")
+	}
+}
+
 func TestParseArgsParsesAspectRatios(t *testing.T) {
 	cfg, err := parseArgs([]string{
 		"--width-min", "16",
@@ -154,6 +184,8 @@ func TestResolveRequestClampsQueryAndOverrides(t *testing.T) {
 		format:      formatPNG,
 		hasFormat:   true,
 		cache:       cachePolicy{seconds: defaultCacheSeconds},
+		label:       true,
+		quality:     defaultQuality,
 	}
 	req := httptest.NewRequest("GET", "/ignored/path?width=999&height=1&color=80123456&format=webp", nil)
 
@@ -174,6 +206,63 @@ func TestResolveRequestClampsQueryAndOverrides(t *testing.T) {
 	}
 }
 
+func TestResolveRequestSupportsQueryAliases(t *testing.T) {
+	cfg := serverConfig{
+		port:        defaultPort,
+		widthRange:  dimensionRange{min: 10, max: 20},
+		heightRange: dimensionRange{min: 30, max: 40},
+		format:      formatPNG,
+		hasFormat:   true,
+		cache:       cachePolicy{seconds: defaultCacheSeconds},
+		label:       true,
+		quality:     defaultQuality,
+	}
+	req := httptest.NewRequest("GET", "/?width=bad&w=999&height=bad&h=1&color=nothex&bg=80123456&format=gif&fmt=webp", nil)
+
+	got := cfg.resolveRequest(req)
+
+	if got.width != 20 {
+		t.Fatalf("width = %d, want 20", got.width)
+	}
+	if got.height != 30 {
+		t.Fatalf("height = %d, want 30", got.height)
+	}
+	wantColor := color.NRGBA{R: 0x12, G: 0x34, B: 0x56, A: 0x80}
+	if got.color != wantColor {
+		t.Fatalf("color = %#v, want %#v", got.color, wantColor)
+	}
+	if got.format != formatWebP {
+		t.Fatalf("format = %q, want %q", got.format, formatWebP)
+	}
+}
+
+func TestResolveRequestUsesSeededRandomSequence(t *testing.T) {
+	args := []string{
+		"--width-min", "10",
+		"--width-max", "20",
+		"--height-min", "30",
+		"--height-max", "40",
+		"--seed", "12345",
+	}
+	cfgA, err := parseArgs(args, io.Discard)
+	if err != nil {
+		t.Fatalf("parseArgs returned error for cfgA: %v", err)
+	}
+	cfgB, err := parseArgs(args, io.Discard)
+	if err != nil {
+		t.Fatalf("parseArgs returned error for cfgB: %v", err)
+	}
+	req := httptest.NewRequest("GET", "/", nil)
+
+	for i := 0; i < 5; i++ {
+		gotA := cfgA.resolveRequest(req)
+		gotB := cfgB.resolveRequest(req)
+		if gotA != gotB {
+			t.Fatalf("seeded request %d = %#v, want %#v", i, gotA, gotB)
+		}
+	}
+}
+
 func TestResolveRequestIgnoresInvalidQuery(t *testing.T) {
 	wantColor := color.NRGBA{R: 10, G: 20, B: 30, A: 0xff}
 	cfg := serverConfig{
@@ -185,6 +274,8 @@ func TestResolveRequestIgnoresInvalidQuery(t *testing.T) {
 		format:      formatJPG,
 		hasFormat:   true,
 		cache:       cachePolicy{seconds: defaultCacheSeconds},
+		label:       true,
+		quality:     defaultQuality,
 	}
 	req := httptest.NewRequest("GET", "/?width=0&height=bad&color=not-hex&format=gif", nil)
 

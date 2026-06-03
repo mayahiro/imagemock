@@ -36,7 +36,8 @@ go run . \
   --aspect-ratio 16:9,4:3 \
   --color 80ff0000 \
   --format webp \
-  --cache-control 60
+  --cache-control 60 \
+  --seed 12345
 ```
 
 Open any path on the server:
@@ -58,6 +59,9 @@ curl 'http://localhost:8080/any/path?width=320&height=240&color=0f0&format=png' 
 | `--color` | Fixed color as `RGB`, `RRGGBB`, or `AARRGGBB` hex | Random opaque RGB per request |
 | `--format` | Fixed output format: `jpg`, `png`, or `webp` | Random per request |
 | `--cache-control` | Browser cache duration in seconds, or `none` for `no-store` | `60` |
+| `--no-label` | Disable the centered `w x h` label | Label enabled |
+| `--quality` | JPEG quality from `1` to `100` | `80` |
+| `--seed` | Deterministic random seed for generated dimensions, colors, and formats | Random |
 
 When width, height, color, or format are not fixed by CLI options, they are selected independently for each request.
 
@@ -66,6 +70,8 @@ Dimensions are limited to `1..16384`. This keeps the WebP lossless output inside
 When aspect ratios are configured, the server chooses one ratio per request and generates an integer-multiple size within the configured width and height ranges. Explicit `width` and `height` query values take precedence over aspect-ratio generation.
 
 Every generated image prints its size at the center as `w x h` using the embedded Go Regular font. The text color and size are selected from the image dimensions and background color.
+
+`--quality` currently affects `jpg` output only. `webp` output is lossless because `github.com/mayahiro/go-webp` currently writes VP8L lossless images.
 
 ## Query Options
 
@@ -79,6 +85,15 @@ Supported query options are:
 | `format` | Requested format: `jpg`, `png`, or `webp` |
 
 Unsupported or invalid query values are ignored.
+
+Short aliases are also supported:
+
+| Canonical | Aliases |
+| --- | --- |
+| `width` | `w` |
+| `height` | `h` |
+| `color` | `c`, `bg` |
+| `format` | `fmt`, `f` |
 
 ## Formats
 

@@ -16,13 +16,13 @@ func encodeImage(w io.Writer, spec imageSpec) error {
 	case formatJPG:
 		c := spec.color
 		c.A = 0xff
-		img := newLabelImage(spec.width, spec.height, c)
-		return jpeg.Encode(w, img, &jpeg.Options{Quality: 80})
+		img := newLabelImage(spec.width, spec.height, c, spec.label)
+		return jpeg.Encode(w, img, &jpeg.Options{Quality: spec.quality})
 	case formatPNG:
-		img := newLabelImage(spec.width, spec.height, spec.color)
+		img := newLabelImage(spec.width, spec.height, spec.color, spec.label)
 		return encodePNG(w, img)
 	case formatWebP:
-		img := newLabelImage(spec.width, spec.height, spec.color)
+		img := newLabelImage(spec.width, spec.height, spec.color, spec.label)
 		return webp.Encode(w, img, nil)
 	default:
 		return errUnsupportedFormat(spec.format)

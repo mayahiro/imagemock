@@ -32,19 +32,23 @@ type labelImage struct {
 	mask      *image.Alpha
 }
 
-func newLabelImage(width, height int, bg color.NRGBA) labelImage {
+func newLabelImage(width, height int, bg color.NRGBA, withLabel bool) labelImage {
+	img := labelImage{
+		rect: image.Rect(0, 0, width, height),
+		bg:   bg,
+		fg:   readableTextColor(bg),
+	}
+	if !withLabel {
+		return img
+	}
+
 	label := fmt.Sprintf("%d x %d", width, height)
 	mask := renderLabelMask(width, height, label)
-
-	return labelImage{
-		rect:      image.Rect(0, 0, width, height),
-		bg:        bg,
-		fg:        readableTextColor(bg),
-		label:     label,
-		labelLeft: (width - mask.Bounds().Dx()) / 2,
-		labelTop:  (height - mask.Bounds().Dy()) / 2,
-		mask:      mask,
-	}
+	img.label = label
+	img.labelLeft = (width - mask.Bounds().Dx()) / 2
+	img.labelTop = (height - mask.Bounds().Dy()) / 2
+	img.mask = mask
+	return img
 }
 
 func (img labelImage) ColorModel() color.Model {

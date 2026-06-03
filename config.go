@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"image/color"
 	"io"
-	"math/rand/v2"
 	"net/http"
 	"strconv"
 	"strings"
@@ -17,6 +16,7 @@ const (
 	defaultMinDimension = 1
 	defaultMaxDimension = 1024
 	defaultCacheSeconds = 60
+	defaultQuality      = 80
 	maxDimension        = 16384
 )
 
@@ -35,11 +35,11 @@ type dimensionRange struct {
 	max int
 }
 
-func (r dimensionRange) random() int {
+func (r dimensionRange) random(random *randomSource) int {
 	if r.min == r.max {
 		return r.min
 	}
-	return r.min + rand.IntN(r.max-r.min+1)
+	return r.min + random.intN(r.max-r.min+1)
 }
 
 func (r dimensionRange) clamp(v int) int {
@@ -62,13 +62,18 @@ type serverConfig struct {
 	format      imageFormat
 	hasFormat   bool
 	cache       cachePolicy
+	label       bool
+	quality     int
+	random      *randomSource
 }
 
 type imageSpec struct {
-	width  int
-	height int
-	color  color.NRGBA
-	format imageFormat
+	width   int
+	height  int
+	color   color.NRGBA
+	format  imageFormat
+	label   bool
+	quality int
 }
 
 type cachePolicy struct {
@@ -129,6 +134,9 @@ func parseArgs(args []string, output io.Writer) (serverConfig, error) {
 		format       string
 		cacheControl string
 		ratios       aspectRatioFlag
+		noLabel      bool
+		quality      int
+		seedText     string
 	)
 
 	fs := flag.NewFlagSet("imagemock", flag.ContinueOnError)
@@ -142,6 +150,9 @@ func parseArgs(args []string, output io.Writer) (serverConfig, error) {
 	fs.StringVar(&format, "format", "", "fixed format: jpg, png, or webp")
 	fs.StringVar(&cacheControl, "cache-control", strconv.Itoa(defaultCacheSeconds), "browser cache duration in seconds, or none")
 	fs.Var(&ratios, "aspect-ratio", "allowed aspect ratio such as 16:9; repeat or separate with commas")
+	fs.BoolVar(&noLabel, "no-label", false, "disable centered size label")
+	fs.IntVar(&quality, "quality", defaultQuality, "JPEG quality from 1 to 100")
+	fs.StringVar(&seedText, "seed", "", "deterministic random seed")
 
 	if err := fs.Parse(args); err != nil {
 		return serverConfig{}, err
@@ -150,11 +161,19 @@ func parseArgs(args []string, output io.Writer) (serverConfig, error) {
 		return serverConfig{}, fmt.Errorf("unexpected positional arguments: %s", strings.Join(fs.Args(), " "))
 	}
 
+	seed, seeded, err := parseSeed(seedText)
+	if err != nil {
+		return serverConfig{}, err
+	}
+
 	cfg := serverConfig{
 		port:        port,
 		widthRange:  normalizeRange(widthMin, widthMax),
 		heightRange: normalizeRange(heightMin, heightMax),
 		ratios:      []aspectRatio(ratios),
+		label:       !noLabel,
+		quality:     quality,
+		random:      newRandomSource(seed, seeded),
 	}
 	if err := cfg.validate(); err != nil {
 		return serverConfig{}, err
@@ -207,8 +226,11 @@ func (cfg serverConfig) validate() error {
 	if err := validateRange("height", cfg.heightRange); err != nil {
 		return err
 	}
+	if cfg.quality < 1 || cfg.quality > 100 {
+		return fmt.Errorf("quality must be between 1 and 100: %d", cfg.quality)
+	}
 	for _, ratio := range cfg.ratios {
-		if _, _, ok := ratio.randomDimensions(cfg.widthRange, cfg.heightRange); !ok {
+		if _, _, ok := ratio.scaleRange(cfg.widthRange, cfg.heightRange); !ok {
 			return fmt.Errorf("aspect ratio %d:%d cannot fit in width range %d..%d and height range %d..%d", ratio.width, ratio.height, cfg.widthRange.min, cfg.widthRange.max, cfg.heightRange.min, cfg.heightRange.max)
 		}
 	}
@@ -233,10 +255,12 @@ func (cfg serverConfig) resolveRequest(r *http.Request) imageSpec {
 	width, height := cfg.randomDimensions()
 
 	spec := imageSpec{
-		width:  width,
-		height: height,
-		color:  randomColor(),
-		format: randomFormat(),
+		width:   width,
+		height:  height,
+		color:   randomColor(cfg.random),
+		format:  randomFormat(cfg.random),
+		label:   cfg.label,
+		quality: cfg.quality,
 	}
 	if cfg.hasColor {
 		spec.color = cfg.color
@@ -245,16 +269,16 @@ func (cfg serverConfig) resolveRequest(r *http.Request) imageSpec {
 		spec.format = cfg.format
 	}
 
-	if width, ok := parsePositiveInt(q.Get("width")); ok {
+	if width, ok := parseQueryPositiveInt(q, "width", "w"); ok {
 		spec.width = cfg.widthRange.clamp(width)
 	}
-	if height, ok := parsePositiveInt(q.Get("height")); ok {
+	if height, ok := parseQueryPositiveInt(q, "height", "h"); ok {
 		spec.height = cfg.heightRange.clamp(height)
 	}
-	if c, ok := parseHexColor(q.Get("color")); ok {
+	if c, ok := parseQueryColor(q, "color", "c", "bg"); ok {
 		spec.color = c
 	}
-	if f, ok := parseFormat(q.Get("format")); ok {
+	if f, ok := parseQueryFormat(q, "format", "fmt", "f"); ok {
 		spec.format = f
 	}
 
@@ -263,15 +287,48 @@ func (cfg serverConfig) resolveRequest(r *http.Request) imageSpec {
 
 func (cfg serverConfig) randomDimensions() (int, int) {
 	if len(cfg.ratios) == 0 {
-		return cfg.widthRange.random(), cfg.heightRange.random()
+		return cfg.widthRange.random(cfg.random), cfg.heightRange.random(cfg.random)
 	}
 
-	ratio := cfg.ratios[rand.IntN(len(cfg.ratios))]
-	width, height, ok := ratio.randomDimensions(cfg.widthRange, cfg.heightRange)
+	ratio := cfg.ratios[cfg.random.intN(len(cfg.ratios))]
+	width, height, ok := ratio.randomDimensions(cfg.widthRange, cfg.heightRange, cfg.random)
 	if !ok {
-		return cfg.widthRange.random(), cfg.heightRange.random()
+		return cfg.widthRange.random(cfg.random), cfg.heightRange.random(cfg.random)
 	}
 	return width, height
+}
+
+func parseQueryPositiveInt(q map[string][]string, names ...string) (int, bool) {
+	for _, name := range names {
+		for _, value := range q[name] {
+			if parsed, ok := parsePositiveInt(value); ok {
+				return parsed, true
+			}
+		}
+	}
+	return 0, false
+}
+
+func parseQueryColor(q map[string][]string, names ...string) (color.NRGBA, bool) {
+	for _, name := range names {
+		for _, value := range q[name] {
+			if parsed, ok := parseHexColor(value); ok {
+				return parsed, true
+			}
+		}
+	}
+	return color.NRGBA{}, false
+}
+
+func parseQueryFormat(q map[string][]string, names ...string) (imageFormat, bool) {
+	for _, name := range names {
+		for _, value := range q[name] {
+			if parsed, ok := parseFormat(value); ok {
+				return parsed, true
+			}
+		}
+	}
+	return "", false
 }
 
 func parsePositiveInt(s string) (int, bool) {
@@ -296,6 +353,17 @@ func parseCachePolicy(s string) (cachePolicy, error) {
 		return cachePolicy{}, fmt.Errorf("cache-control must be a non-negative second value or none: %q", s)
 	}
 	return cachePolicy{seconds: seconds}, nil
+}
+
+func parseSeed(s string) (uint64, bool, error) {
+	if s == "" {
+		return 0, false, nil
+	}
+	seed, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		return 0, false, fmt.Errorf("seed must be an unsigned integer: %q", s)
+	}
+	return seed, true, nil
 }
 
 func parseAspectRatio(s string) (aspectRatio, error) {
@@ -325,16 +393,24 @@ func parseAspectRatio(s string) (aspectRatio, error) {
 	return aspectRatio{width: width / divisor, height: height / divisor}, nil
 }
 
-func (ratio aspectRatio) randomDimensions(widthRange, heightRange dimensionRange) (int, int, bool) {
+func (ratio aspectRatio) scaleRange(widthRange, heightRange dimensionRange) (int, int, bool) {
 	minScale := max(ceilDiv(widthRange.min, ratio.width), ceilDiv(heightRange.min, ratio.height))
 	maxScale := min(widthRange.max/ratio.width, heightRange.max/ratio.height)
 	if minScale > maxScale {
 		return 0, 0, false
 	}
+	return minScale, maxScale, true
+}
+
+func (ratio aspectRatio) randomDimensions(widthRange, heightRange dimensionRange, random *randomSource) (int, int, bool) {
+	minScale, maxScale, ok := ratio.scaleRange(widthRange, heightRange)
+	if !ok {
+		return 0, 0, false
+	}
 
 	scale := minScale
 	if minScale != maxScale {
-		scale += rand.IntN(maxScale - minScale + 1)
+		scale += random.intN(maxScale - minScale + 1)
 	}
 	return ratio.width * scale, ratio.height * scale, true
 }
@@ -446,17 +522,17 @@ func parseFormat(s string) (imageFormat, bool) {
 	}
 }
 
-func randomColor() color.NRGBA {
+func randomColor(random *randomSource) color.NRGBA {
 	return color.NRGBA{
-		R: uint8(rand.IntN(256)),
-		G: uint8(rand.IntN(256)),
-		B: uint8(rand.IntN(256)),
+		R: uint8(random.intN(256)),
+		G: uint8(random.intN(256)),
+		B: uint8(random.intN(256)),
 		A: 0xff,
 	}
 }
 
-func randomFormat() imageFormat {
-	return supportedFormats[rand.IntN(len(supportedFormats))]
+func randomFormat(random *randomSource) imageFormat {
+	return supportedFormats[random.intN(len(supportedFormats))]
 }
 
 func contentType(format imageFormat) (string, error) {

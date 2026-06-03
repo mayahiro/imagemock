@@ -36,7 +36,8 @@ go run . \
   --aspect-ratio 16:9,4:3 \
   --color 80ff0000 \
   --format webp \
-  --cache-control 60
+  --cache-control 60 \
+  --seed 12345
 ```
 
 任意の path にアクセスできます
@@ -58,6 +59,9 @@ curl 'http://localhost:8080/any/path?width=320&height=240&color=0f0&format=png' 
 | `--color` | `RGB`、`RRGGBB`、`AARRGGBB` 形式の固定色 | request ごとにランダムな不透明 RGB |
 | `--format` | 固定出力形式: `jpg`、`png`、`webp` | request ごとにランダム |
 | `--cache-control` | browser cache duration の秒数、または `no-store` にする `none` | `60` |
+| `--no-label` | 中央の `w x h` label を無効化します | label 有効 |
+| `--quality` | `1` から `100` の JPEG quality | `80` |
+| `--seed` | 生成される寸法、色、format の deterministic random seed | ランダム |
 
 幅、高さ、色、フォーマットが CLI オプションで固定されていない場合、それぞれ request ごとに個別に決定されます
 
@@ -66,6 +70,8 @@ curl 'http://localhost:8080/any/path?width=320&height=240&color=0f0&format=png' 
 aspect ratio が設定されている場合、server は request ごとに候補から 1 つ選び、設定された幅と高さの範囲に収まる整数倍の size を生成します。query の `width` と `height` が明示されている場合は、aspect-ratio 生成より優先されます
 
 生成されるすべての画像の中央には、embedded Go Regular font を使って `w x h` 形式でサイズが印字されます。文字色と文字サイズは画像の寸法と背景色から決定されます
+
+`--quality` は現在 `jpg` 出力にのみ影響します。`webp` 出力は `github.com/mayahiro/go-webp` が現在 VP8L lossless image を出力するため lossless です
 
 ## クエリオプション
 
@@ -79,6 +85,15 @@ aspect ratio が設定されている場合、server は request ごとに候補
 | `format` | 要求する形式: `jpg`、`png`、`webp` |
 
 未対応または不正な query value は無視されます
+
+短い alias も利用できます
+
+| 正式名 | alias |
+| --- | --- |
+| `width` | `w` |
+| `height` | `h` |
+| `color` | `c`, `bg` |
+| `format` | `fmt`, `f` |
 
 ## フォーマット
 
